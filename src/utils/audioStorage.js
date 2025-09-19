@@ -4,34 +4,58 @@ class AudioStorage {
     this.dbName = 'MusicistDB';
     this.version = 1;
     this.db = null;
+    this.isSupported = this.checkSupport();
+  }
+
+  // Check if IndexedDB is supported
+  checkSupport() {
+    if (typeof window === 'undefined') return false;
+    
+    try {
+      return !!(window.indexedDB || 
+                window.webkitIndexedDB || 
+                window.mozIndexedDB || 
+                window.msIndexedDB);
+    } catch (e) {
+      console.warn('IndexedDB not supported:', e);
+      return false;
+    }
   }
 
   // Initialize IndexedDB
   async init() {
+    if (!this.isSupported) {
+      throw new Error('IndexedDB is not supported in this browser');
+    }
+
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.dbName, this.version);
-      
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        this.db = request.result;
-        resolve(this.db);
-      };
-      
-      request.onupgradeneeded = (event) => {
-        const db = event.target.result;
+      try {
+        const request = indexedDB.open(this.dbName, this.version);
         
-        // Create object stores
-        if (!db.objectStoreNames.contains('tracks')) {
-          const trackStore = db.createObjectStore('tracks', { keyPath: 'id' });
-          trackStore.createIndex('name', 'name', { unique: false });
-          trackStore.createIndex('artist', 'artist', { unique: false });
-          trackStore.createIndex('dateAdded', 'dateAdded', { unique: false });
-        }
+        request.onerror = () => reject(new Error(`IndexedDB error: ${request.error}`));
+        request.onsuccess = () => {
+          this.db = request.result;
+          resolve(this.db);
+        };
         
-        if (!db.objectStoreNames.contains('audioFiles')) {
-          db.createObjectStore('audioFiles', { keyPath: 'id' });
-        }
-      };
+        request.onupgradeneeded = (event) => {
+          const db = event.target.result;
+          
+          // Create object stores
+          if (!db.objectStoreNames.contains('tracks')) {
+            const trackStore = db.createObjectStore('tracks', { keyPath: 'id' });
+            trackStore.createIndex('name', 'name', { unique: false });
+            trackStore.createIndex('artist', 'artist', { unique: false });
+            trackStore.createIndex('dateAdded', 'dateAdded', { unique: false });
+          }
+          
+          if (!db.objectStoreNames.contains('audioFiles')) {
+            db.createObjectStore('audioFiles', { keyPath: 'id' });
+          }
+        };
+      } catch (error) {
+        reject(new Error(`Failed to open IndexedDB: ${error.message}`));
+      }
     });
   }
 

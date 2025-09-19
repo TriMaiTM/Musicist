@@ -1,56 +1,24 @@
-// Musicist Service Worker for GitHub Pages
-const CACHE_NAME = 'musicist-v2';
-const AUDIO_CACHE_NAME = 'musicist-audio-v2';
+// Musicist Service Worker - Simplified for GitHub Pages debugging
+const CACHE_NAME = 'musicist-v3';
+const AUDIO_CACHE_NAME = 'musicist-audio-v3';
 
-// Get the base path for GitHub Pages
-const getBasePath = () => {
-  const location = self.location;
-  if (location.hostname === 'trimaitm.github.io') {
-    return '/Musicist';
-  }
-  return '';
-};
-
-const BASE_PATH = getBasePath();
-
-// Static files to cache (adjust paths for GitHub Pages)
-const STATIC_CACHE_URLS = [
-  `${BASE_PATH}/`,
-  `${BASE_PATH}/static/js/bundle.js`,
-  `${BASE_PATH}/static/css/main.css`,
-  `${BASE_PATH}/manifest.json`,
-  `${BASE_PATH}/favicon.ico`
-];
-
-// Install event - cache static resources
+// Install event - simple cache strategy
 self.addEventListener('install', event => {
-  console.log('Service Worker installing...');
-  event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => {
-      // Try to cache files, but don't fail if some are missing
-      return Promise.allSettled(
-        STATIC_CACHE_URLS.map(url => 
-          fetch(url).then(response => {
-            if (response.ok) {
-              return cache.put(url, response);
-            }
-          }).catch(err => console.log(`Failed to cache ${url}:`, err))
-        )
-      );
-    })
-  );
+  console.log('[SW] Installing...');
   self.skipWaiting();
 });
 
 // Activate event - clean up old caches
 self.addEventListener('activate', event => {
-  console.log('Service Worker activating...');
+  console.log('[SW] Activating...');
   event.waitUntil(
     caches.keys().then(cacheNames => {
       return Promise.all(
         cacheNames.map(cacheName => {
-          if (cacheName !== CACHE_NAME && cacheName !== AUDIO_CACHE_NAME) {
-            console.log('Deleting old cache:', cacheName);
+          if (cacheName.startsWith('musicist-') && 
+              cacheName !== CACHE_NAME && 
+              cacheName !== AUDIO_CACHE_NAME) {
+            console.log('[SW] Deleting old cache:', cacheName);
             return caches.delete(cacheName);
           }
         })
@@ -60,34 +28,38 @@ self.addEventListener('activate', event => {
   self.clients.claim();
 });
 
-// Fetch event - serve from cache, fallback to network
+// Fetch event - basic caching strategy
 self.addEventListener('fetch', event => {
-  const { request } = event;
-  const url = new URL(request.url);
-
-  // Skip non-GET requests
-  if (request.method !== 'GET') {
+  // Skip non-GET requests and chrome-extension requests
+  if (event.request.method !== 'GET' || 
+      event.request.url.startsWith('chrome-extension://')) {
     return;
   }
 
+  const url = new URL(event.request.url);
+  
   // Handle audio files specially
-  if (request.url.includes('audio/') || 
-      request.url.match(/\.(mp3|wav|ogg|m4a|flac|aac)$/i)) {
+  if (event.request.url.match(/\.(mp3|wav|ogg|m4a|flac|aac)$/i) ||
+      event.request.url.includes('audio/') ||
+      event.request.url.includes('cached-audio/')) {
+    
     event.respondWith(
       caches.open(AUDIO_CACHE_NAME).then(cache => {
-        return cache.match(request).then(response => {
+        return cache.match(event.request).then(response => {
           if (response) {
+            console.log('[SW] Serving audio from cache:', event.request.url);
             return response;
           }
-          return fetch(request).then(fetchResponse => {
-            // Don't cache if it's not successful
-            if (fetchResponse.ok) {
-              cache.put(request, fetchResponse.clone());
+          
+          return fetch(event.request).then(fetchResponse => {
+            if (fetchResponse && fetchResponse.status === 200) {
+              cache.put(event.request, fetchResponse.clone());
+              console.log('[SW] Cached audio file:', event.request.url);
             }
             return fetchResponse;
-          }).catch(err => {
-            console.log('Failed to fetch audio:', err);
-            return new Response('Audio file not found', { status: 404 });
+          }).catch(error => {
+            console.log('[SW] Audio fetch failed:', error);
+            return new Response('Audio not available', { status: 404 });
           });
         });
       })
@@ -95,58 +67,67 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Handle other requests
+  // Handle other requests with cache-first strategy
   event.respondWith(
-    caches.match(request).then(response => {
-      // Return cached version or fetch from network
-      return response || fetch(request).catch(() => {
-        // If offline and no cache, return offline page for navigation requests
-        if (request.mode === 'navigate') {
-          return caches.match(`${BASE_PATH}/`) || 
-                 caches.match('/') ||
-                 new Response('Offline', { status: 503 });
+    caches.match(event.request).then(response => {
+      // Return cached version if available
+      if (response) {
+        console.log('[SW] Serving from cache:', event.request.url);
+        return response;
+      }
+
+      // Otherwise fetch from network
+      return fetch(event.request).then(fetchResponse => {
+        // Don't cache if not successful
+        if (!fetchResponse || fetchResponse.status !== 200) {
+          return fetchResponse;
         }
-        return new Response('Resource not available offline', { status: 503 });
+
+        // Cache successful responses
+        const responseToCache = fetchResponse.clone();
+        caches.open(CACHE_NAME).then(cache => {
+          cache.put(event.request, responseToCache);
+          console.log('[SW] Cached resource:', event.request.url);
+        });
+
+        return fetchResponse;
+      }).catch(error => {
+        console.log('[SW] Fetch failed:', event.request.url, error);
+        
+        // For navigation requests, try to return the main page
+        if (event.request.mode === 'navigate') {
+          return caches.match('/') || 
+                 caches.match('./') ||
+                 new Response('<h1>Offline</h1><p>Please check your connection and try again.</p>', {
+                   headers: { 'Content-Type': 'text/html' }
+                 });
+        }
+        
+        return new Response('Resource not available offline', { 
+          status: 503,
+          statusText: 'Service Unavailable'
+        });
       });
     })
   );
 });
 
-// Background sync for future enhancements
-self.addEventListener('sync', event => {
-  console.log('Background sync:', event.tag);
-});
-
-// Push notifications (for future enhancements)
-self.addEventListener('push', event => {
-  if (event.data) {
-    const data = event.data.json();
-    const options = {
-      body: data.body,
-      icon: `${BASE_PATH}/logo192.png`,
-      badge: `${BASE_PATH}/favicon.ico`
-    };
-    event.waitUntil(
-      self.registration.showNotification(data.title, options)
-    );
-  }
-});
-
-// Handle audio caching messages from main thread
+// Handle messages from main thread (for audio caching)
 self.addEventListener('message', event => {
   if (event.data && event.data.type === 'CACHE_AUDIO') {
     const { audioData, filename } = event.data;
     
-    // Cache the audio blob
+    console.log('[SW] Caching audio file:', filename);
+    
     caches.open(AUDIO_CACHE_NAME).then(cache => {
       const response = new Response(audioData, {
-        headers: {
-          'Content-Type': 'audio/mpeg'
-        }
+        headers: { 'Content-Type': 'audio/mpeg' }
       });
-      cache.put(`${BASE_PATH}/cached-audio/${filename}`, response);
+      cache.put(`./cached-audio/${filename}`, response);
+    }).catch(error => {
+      console.error('[SW] Failed to cache audio:', error);
     });
   }
 });
 
-console.log('Service Worker loaded for Musicist PWA - GitHub Pages version');
+console.log('[SW] Musicist Service Worker loaded - GitHub Pages compatible version');
