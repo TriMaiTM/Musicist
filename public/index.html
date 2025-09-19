@@ -32,9 +32,15 @@
       // Register service worker
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js')
+          // Determine the correct path for service worker
+          const isGitHubPages = window.location.hostname === 'trimaitm.github.io';
+          const basePath = isGitHubPages ? '/Musicist' : '';
+          const swUrl = `${basePath}/sw.js`;
+          
+          navigator.serviceWorker.register(swUrl)
             .then(registration => {
               console.log('SW registered: ', registration);
+              console.log('SW scope: ', registration.scope);
             })
             .catch(registrationError => {
               console.log('SW registration failed: ', registrationError);
